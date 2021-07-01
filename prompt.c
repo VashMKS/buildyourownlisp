@@ -42,28 +42,21 @@ void add_history(char* unused) {}
 int main(int argc, char** argv) {
 	
 	// Declare parsers
-	mpc_parser_t* Integer     = mpc_new("integer");
-	mpc_parser_t* Decimal     = mpc_new("decimal");
 	mpc_parser_t* Number      = mpc_new("number");
-	mpc_parser_t* OperatorSym = mpc_new("operator_sym");
-	mpc_parser_t* OperatorStr = mpc_new("operator_str");
 	mpc_parser_t* Operator    = mpc_new("operator");
 	mpc_parser_t* Expr        = mpc_new("expr");
 	mpc_parser_t* Lsp         = mpc_new("lsp");
 
 	// Define them
 	mpca_lang(MPCA_LANG_DEFAULT,
-		"                                                                \
-		integer      : /-?[0-9]+/ ;                                      \
-		decimal      : /-?[0-9]+/ '.' /[0-9]+/ ;                         \
-		number       : <decimal> | <integer> ;                           \
-		operator_sym : '+' | '-' | '*' | '/' | '%' ;                     \
-		operator_str : \"add\" | \"sub\" | \"mul\" | \"div\" | \"mod\" ; \
-		operator     : <operator_sym> | <operator_str> ;                 \
-		expr         : <number> | '(' <operator> <expr>+ ')' ;           \
-		lsp          : /^/ <operator> <expr>+ /$/ ;                      \
+		"                                                            \
+		number   : /-?[0-9]+(\\.[0-9]+)?/ ;                          \
+		operator : '+'     | '-'     | '*'     | '/'     | '%'     | \
+		           \"add\" | \"sub\" | \"mul\" | \"div\" | \"mod\" ; \
+		expr     : <number> | '(' <operator> <expr>+ ')' ;           \
+		lsp      : /^/ <operator> <expr>+ /$/ ;                      \
 		",
-		Integer, Decimal, Number, OperatorSym, OperatorStr, Operator, Expr, Lsp);
+		Number, Operator, Expr, Lsp);
 
 	
 	// Print version and exit information
@@ -92,7 +85,7 @@ int main(int argc, char** argv) {
 	}
 	
 	// Undefine and delete our parsers
-	mpc_cleanup(8, Integer, Decimal, Number, OperatorSym, OperatorStr, Operator, Expr, Lsp);
+	mpc_cleanup(4, Number, Operator, Expr, Lsp);
 	
 	return 0;
 	

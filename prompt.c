@@ -1,7 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "mpc.h"  // #include with "" instead of <> searches local folder first
+// #include with "" instead of <> searches local folder first
+#include "mpc.h"  // micro parser combinator lib
 
 // Preprocessing directive below checks if the _WIN32 macro is defined, meaning we are on Windows
 // There exist other similar predefined macros for other OS like __linux, __APPLE__ or __ANDROID__
@@ -39,6 +40,38 @@ void add_history(char* unused) {}
 #endif
 
 
+long eval_op(long x, char* op, long y) {
+	if (strcmp(op, "+") == 0) {return x + y;}
+	if (strcmp(op, "-") == 0) {return x - y;}
+	if (strcmp(op, "*") == 0) {return x * y;}
+	if (strcmp(op, "/") == 0) {return x / y;}
+	return 0;
+}
+
+long eval(mpc_ast_t* t) {
+
+	// If tagged a number, we evaluate to a int directly
+	if (strstr(t->tag, "number")) {
+		return atoi(t->contents);
+	}
+	
+	// Operator is always the second child
+	char* op = t->children[1]->contents;
+	
+	// Store third child in x
+	long x = eval(t->children[2]);
+	
+	// Iterate remaining children and combine result
+	int i = 3;
+	while (strstr(t->children[i]->tag, "expr")) {
+		x = eval_op(x, op, eval(t->children[i]));
+		i++;
+	}
+	
+	return x;
+}
+
+
 int main(int argc, char** argv) {
 	
 	// Declare parsers
@@ -49,12 +82,11 @@ int main(int argc, char** argv) {
 
 	// Define them
 	mpca_lang(MPCA_LANG_DEFAULT,
-		"                                                            \
-		number   : /-?[0-9]+(\\.[0-9]+)?/ ;                          \
-		operator : '+'     | '-'     | '*'     | '/'     | '%'     | \
-		           \"add\" | \"sub\" | \"mul\" | \"div\" | \"mod\" ; \
-		expr     : <number> | '(' <operator> <expr>+ ')' ;           \
-		lsp      : /^/ <operator> <expr>+ /$/ ;                      \
+		"                                                  \
+		number   : /-?[0-9]+/ ;                            \
+		operator : '+' | '-' | '*' | '/' | '%' ;           \
+		expr     : <number> | '(' <operator> <expr>+ ')' ; \
+		lsp      : /^/ <operator> <expr>+ /$/ ;            \
 		",
 		Number, Operator, Expr, Lsp);
 
@@ -72,8 +104,9 @@ int main(int argc, char** argv) {
 		// Attempt to parse user input
 		mpc_result_t r;
 		if (mpc_parse("<stdin>", input, Lsp, &r)) {
-			// On success print AST
-			mpc_ast_print(r.output);
+			// On success evaluate AST and print result
+			long result = eval(r.output);
+			printf("%li\n", result);
 			mpc_ast_delete(r.output);
 		} else {
 			// Otherwise print error

@@ -84,7 +84,7 @@ int main(int argc, char** argv) {
 	mpca_lang(MPCA_LANG_DEFAULT,
 		"                                                  \
 		number   : /-?[0-9]+/ ;                            \
-		operator : '+' | '-' | '*' | '/' | '%' ;           \
+		operator : '+' | '-' | '*' | '/' ;                 \
 		expr     : <number> | '(' <operator> <expr>+ ')' ; \
 		lsp      : /^/ <operator> <expr>+ /$/ ;            \
 		",
@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
 
 	
 	// Print version and exit information
-	puts("Lsp version 0.0.0.0.2");
+	puts("Lsp version 0.0.0.0.3");
 	puts("Ctrl+C to exit\n");
 	
 	// Endlessly prompt for input and reply back

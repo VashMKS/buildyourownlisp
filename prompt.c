@@ -39,27 +39,101 @@ void add_history(char* unused) {}
 
 #endif
 
+// Lsp value, either a number or an error
+typedef struct {
+	int type;
+	long num;
+	int err;
+} lval;
 
-long eval_op(long x, char* op, long y) {
-	if (strcmp(op, "+") == 0) {return x + y;}
-	if (strcmp(op, "-") == 0) {return x - y;}
-	if (strcmp(op, "*") == 0) {return x * y;}
-	if (strcmp(op, "/") == 0) {return x / y;}
-	return 0;
+// Valid lval types
+enum {
+	LVAL_NUM,
+	LVAL_ERR
+};
+
+// Valid lval errors
+enum {
+	LERR_DIV_ZERO,
+	LERR_BAD_OP,
+	LERR_BAD_NUM
+};
+
+// Creates a number lval
+lval lval_num(long x) {
+	lval v;
+	v.type = LVAL_NUM;
+	v.num = x;
+	return v;
 }
 
-long eval(mpc_ast_t* t) {
+// Creates an error lval
+lval lval_err(int x) {
+	lval v;
+	v.type = LVAL_ERR;
+	v.err = x;
+	return v;
+}
 
-	// If tagged a number, we evaluate to a int directly
+// Print an lval, handling all possible cases
+void lval_print(lval v) {
+	switch (v.type) {
+		case LVAL_NUM:
+			printf("%li", v.num); break;
+		case LVAL_ERR:
+			if (v.err == LERR_DIV_ZERO) {
+				printf("Error: Division by zero");
+			}
+			if (v.err == LERR_BAD_OP) {
+				printf("Error: Invalid operator");
+			}
+			if (v.err == LERR_BAD_NUM) {
+				printf("Error: Invalid number");
+			}
+			break;
+	}
+}
+
+// Print an lval, followed by a newline
+void lval_println(lval v) {
+	lval_print(v);
+	putchar('\n');
+}
+
+lval eval_op(lval x, char* op, lval y) {
+	
+	// If either lval is an error, return it
+	if (x.type == LVAL_ERR) { return x; }
+	if (x.type == LVAL_ERR) { return x; }
+	
+	// Otherwise, evaluate the operators
+	if (strcmp(op, "+") == 0) { return lval_num(x.num + y.num); }
+	if (strcmp(op, "-") == 0) { return lval_num(x.num - y.num); }
+	if (strcmp(op, "*") == 0) { return lval_num(x.num * y.num); }
+	if (strcmp(op, "/") == 0) {
+		// Return error on division by 0
+		return y.num == 0 ? lval_err(LERR_DIV_ZERO) : lval_num(x.num / y.num);
+	}
+	
+	// If operator is not recognized return error
+	return lval_err(LERR_BAD_OP);
+}
+
+lval eval(mpc_ast_t* t) {
+
+	// If tagged a number, evaluate to int directly
 	if (strstr(t->tag, "number")) {
-		return atoi(t->contents);
+		// Error if conversion fails
+		errno = 0;
+		long x = strtol(t->contents, NULL, 10);
+		return errno != ERANGE ? lval_num(x) : lval_err(LERR_BAD_NUM);
 	}
 	
 	// Operator is always the second child
 	char* op = t->children[1]->contents;
 	
 	// Store third child in x
-	long x = eval(t->children[2]);
+	lval x = eval(t->children[2]);
 	
 	// Iterate remaining children and combine result
 	int i = 3;
@@ -105,8 +179,8 @@ int main(int argc, char** argv) {
 		mpc_result_t r;
 		if (mpc_parse("<stdin>", input, Lsp, &r)) {
 			// On success evaluate AST and print result
-			long result = eval(r.output);
-			printf("%li\n", result);
+			lval result = eval(r.output);
+			lval_println(result);
 			mpc_ast_delete(r.output);
 		} else {
 			// Otherwise print error

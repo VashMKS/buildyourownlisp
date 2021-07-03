@@ -104,7 +104,7 @@ lval eval_op(lval x, char* op, lval y) {
 	
 	// If either lval is an error, return it
 	if (x.type == LVAL_ERR) { return x; }
-	if (x.type == LVAL_ERR) { return x; }
+	if (y.type == LVAL_ERR) { return y; }
 	
 	// Otherwise, evaluate the operators
 	if (strcmp(op, "+") == 0) { return lval_num(x.num + y.num); }

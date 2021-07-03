@@ -42,28 +42,40 @@ void add_history(char* unused) {}
 // Lsp value, either a number or an error
 typedef struct {
 	int type;
-	long num;
+	union Number {
+		long integer;
+		double real;
+	} num;
 	int err;
 } lval;
 
 // Valid lval types
 enum {
-	LVAL_NUM,
+	LVAL_INT,
+	LVAL_REAL,
 	LVAL_ERR
 };
 
 // Valid lval errors
 enum {
-	LERR_DIV_ZERO,
-	LERR_BAD_OP,
-	LERR_BAD_NUM
+	LERR_DIV_ZERO, // Produced on division by zero
+	LERR_BAD_OP,   // Produced on invalid operator
+	LERR_BAD_NUM   // Produced on invalid number
 };
 
-// Creates a number lval
-lval lval_num(long x) {
+// Creates an integer lval
+lval lval_int(long x) {
 	lval v;
-	v.type = LVAL_NUM;
-	v.num = x;
+	v.type = LVAL_INT;
+	v.num.integer = x;
+	return v;
+}
+
+// Creates a real lval
+lval lval_real(double x) {
+	lval v;
+	v.type = LVAL_REAL;
+	v.num.real = x;
 	return v;
 }
 
@@ -78,8 +90,10 @@ lval lval_err(int x) {
 // Print an lval, handling all possible cases
 void lval_print(lval v) {
 	switch (v.type) {
-		case LVAL_NUM:
-			printf("%li", v.num); break;
+		case LVAL_INT:
+			printf("%li", v.num.integer); break;
+		case LVAL_REAL:
+			printf("%g", v.num.real); break;
 		case LVAL_ERR:
 			if (v.err == LERR_DIV_ZERO) {
 				printf("Error: Division by zero");
@@ -101,19 +115,47 @@ void lval_println(lval v) {
 }
 
 lval eval_op(lval x, char* op, lval y) {
-	
 	// If either lval is an error, return it
 	if (x.type == LVAL_ERR) { return x; }
 	if (y.type == LVAL_ERR) { return y; }
 	
-	// Otherwise, evaluate the operators
-	if (strcmp(op, "+") == 0) { return lval_num(x.num + y.num); }
-	if (strcmp(op, "-") == 0) { return lval_num(x.num - y.num); }
-	if (strcmp(op, "%") == 0) { return lval_num(x.num % y.num); }
-	if (strcmp(op, "*") == 0) { return lval_num(x.num * y.num); }
-	if (strcmp(op, "/") == 0) {
-		// Return error on division by 0
-		return y.num == 0 ? lval_err(LERR_DIV_ZERO) : lval_num(x.num / y.num);
+	// Otherwise, evaluate the operators, accounting for all possible combinations
+	if (x.type == LVAL_REAL && y.type == LVAL_REAL) {
+		if (strcmp(op, "+") == 0) { return lval_real(x.num.real + y.num.real); }
+		if (strcmp(op, "-") == 0) { return lval_real(x.num.real - y.num.real); }
+		if (strcmp(op, "*") == 0) { return lval_real(x.num.real * y.num.real); }
+		if (strcmp(op, "/") == 0) {
+			if (y.num.real == 0) return lval_err(LERR_DIV_ZERO); 
+			else return lval_real(x.num.real / y.num.real);
+		}
+	}
+	if (x.type == LVAL_REAL && y.type == LVAL_INT) {
+		if (strcmp(op, "+") == 0) { return lval_real(x.num.real + (double)y.num.integer); }
+		if (strcmp(op, "-") == 0) { return lval_real(x.num.real - (double)y.num.integer); }
+		if (strcmp(op, "*") == 0) { return lval_real(x.num.real * (double)y.num.integer); }
+		if (strcmp(op, "/") == 0) {
+			if (y.num.integer == 0) return lval_err(LERR_DIV_ZERO); 
+			else return lval_real(x.num.real / (double)y.num.integer);
+		}
+	}
+	if (x.type == LVAL_INT && y.type == LVAL_REAL) {
+		if (strcmp(op, "+") == 0) { return lval_real((double)x.num.integer + y.num.real); }
+		if (strcmp(op, "-") == 0) { return lval_real((double)x.num.integer - y.num.real); }
+		if (strcmp(op, "*") == 0) { return lval_real((double)x.num.integer * y.num.real); }
+		if (strcmp(op, "/") == 0) {
+			if (y.num.real == 0) return lval_err(LERR_DIV_ZERO); 
+			else return lval_real((double)x.num.integer / y.num.real);
+		}
+	}
+	if (x.type == LVAL_INT && y.type == LVAL_INT) {
+		if (strcmp(op, "+") == 0) { return lval_int(x.num.integer + y.num.integer); }
+		if (strcmp(op, "-") == 0) { return lval_int(x.num.integer - y.num.integer); }
+		if (strcmp(op, "*") == 0) { return lval_int(x.num.integer * y.num.integer); }
+		if (strcmp(op, "/") == 0) {
+			if (y.num.integer == 0) return lval_err(LERR_DIV_ZERO); 
+			else return lval_int(x.num.integer / y.num.integer);
+		}
+		if (strcmp(op, "%") == 0) { return lval_int(x.num.integer % y.num.integer); }
 	}
 	
 	// If operator is not recognized return error
@@ -122,12 +164,18 @@ lval eval_op(lval x, char* op, lval y) {
 
 lval eval(mpc_ast_t* t) {
 
-	// If tagged a number, evaluate to int directly
-	if (strstr(t->tag, "number")) {
+	// If tagged a number, evaluate to long/double appropriately
+	if (strstr(t->tag, "integer")) {
 		// Error if conversion fails
 		errno = 0;
 		long x = strtol(t->contents, NULL, 10);
-		return errno != ERANGE ? lval_num(x) : lval_err(LERR_BAD_NUM);
+		return errno != ERANGE ? lval_int(x) : lval_err(LERR_BAD_NUM);
+	}
+	if (strstr(t->tag, "decimal")) {
+		// Error if conversion fails
+		errno = 0;
+		double x = strtod(t->contents, NULL);
+		return errno != ERANGE ? lval_real(x) : lval_err(LERR_BAD_NUM);
 	}
 	
 	// Operator is always the second child
@@ -150,6 +198,8 @@ lval eval(mpc_ast_t* t) {
 int main(int argc, char** argv) {
 	
 	// Declare parsers
+	mpc_parser_t* Integer     = mpc_new("integer");
+	mpc_parser_t* Decimal     = mpc_new("decimal");
 	mpc_parser_t* Number      = mpc_new("number");
 	mpc_parser_t* Operator    = mpc_new("operator");
 	mpc_parser_t* Expr        = mpc_new("expr");
@@ -158,12 +208,14 @@ int main(int argc, char** argv) {
 	// Define them
 	mpca_lang(MPCA_LANG_DEFAULT,
 		"                                                  \
-		number   : /-?[0-9]+/ ;                            \
+		integer  : /-?[0-9]+/ ;                            \
+		decimal  : /-?[0-9]+\\.[0-9]*/ ;                   \
+		number   : <decimal> | <integer> ;                 \
 		operator : '+' | '-' | '*' | '/' | '%' ;           \
 		expr     : <number> | '(' <operator> <expr>+ ')' ; \
 		lsp      : /^/ <operator> <expr>+ /$/ ;            \
 		",
-		Number, Operator, Expr, Lsp);
+		Integer, Decimal, Number, Operator, Expr, Lsp);
 
 	
 	// Print version and exit information
@@ -193,7 +245,7 @@ int main(int argc, char** argv) {
 	}
 	
 	// Undefine and delete our parsers
-	mpc_cleanup(4, Number, Operator, Expr, Lsp);
+	mpc_cleanup(6, Integer, Decimal, Number, Operator, Expr, Lsp);
 	
 	return 0;
 	

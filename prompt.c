@@ -165,17 +165,17 @@ lval eval_op(lval x, char* op, lval y) {
 lval eval(mpc_ast_t* t) {
 
 	// If tagged a number, evaluate to long/double appropriately
-	if (strstr(t->tag, "integer")) {
-		// Error if conversion fails
-		errno = 0;
-		long x = strtol(t->contents, NULL, 10);
-		return errno != ERANGE ? lval_int(x) : lval_err(LERR_BAD_NUM);
-	}
-	if (strstr(t->tag, "decimal")) {
-		// Error if conversion fails
-		errno = 0;
-		double x = strtod(t->contents, NULL);
-		return errno != ERANGE ? lval_real(x) : lval_err(LERR_BAD_NUM);
+	if (strstr(t->tag, "number")) {
+		// If the representation contains a dot, it is a decimal number, otherwise an integer
+		if (strstr(t->contents, ".")) {
+			errno = 0;
+			double x = strtod(t->contents, NULL);
+			return errno != ERANGE ? lval_real(x) : lval_err(LERR_BAD_NUM);
+		} else {
+			errno = 0;
+			long x = strtol(t->contents, NULL, 10);
+			return errno != ERANGE ? lval_int(x) : lval_err(LERR_BAD_NUM);
+		}
 	}
 	
 	// Operator is always the second child
@@ -198,8 +198,6 @@ lval eval(mpc_ast_t* t) {
 int main(int argc, char** argv) {
 	
 	// Declare parsers
-	mpc_parser_t* Integer     = mpc_new("integer");
-	mpc_parser_t* Decimal     = mpc_new("decimal");
 	mpc_parser_t* Number      = mpc_new("number");
 	mpc_parser_t* Operator    = mpc_new("operator");
 	mpc_parser_t* Expr        = mpc_new("expr");
@@ -208,14 +206,12 @@ int main(int argc, char** argv) {
 	// Define them
 	mpca_lang(MPCA_LANG_DEFAULT,
 		"                                                  \
-		integer  : /-?[0-9]+/ ;                            \
-		decimal  : /-?[0-9]+\\.[0-9]*/ ;                   \
-		number   : <decimal> | <integer> ;                 \
+		number  : /-?[0-9]+(\\.[0-9]*)?/ ;                    \
 		operator : '+' | '-' | '*' | '/' | '%' ;           \
 		expr     : <number> | '(' <operator> <expr>+ ')' ; \
 		lsp      : /^/ <operator> <expr>+ /$/ ;            \
 		",
-		Integer, Decimal, Number, Operator, Expr, Lsp);
+		Number, Operator, Expr, Lsp);
 
 	
 	// Print version and exit information
@@ -245,7 +241,7 @@ int main(int argc, char** argv) {
 	}
 	
 	// Undefine and delete our parsers
-	mpc_cleanup(6, Integer, Decimal, Number, Operator, Expr, Lsp);
+	mpc_cleanup(4, Number, Operator, Expr, Lsp);
 	
 	return 0;
 	

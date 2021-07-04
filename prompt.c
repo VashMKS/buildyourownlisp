@@ -41,6 +41,7 @@ enum {
 	LVAL_NUM,
 	LVAL_SYM,
 	LVAL_SEXPR,
+	LVAL_QEXPR,
 	LVAL_ERR
 };
 
@@ -83,6 +84,15 @@ lval* lval_sexpr(void) {
 	return v;
 }
 
+lval* lval_qexpr(void) {
+	// Constructor for Q-expression lval
+	lval* v = malloc(sizeof(lval));
+	v->type = LVAL_QEXPR;
+	v->count = 0;
+	v->cell = NULL;
+	return v;
+}
+
 lval* lval_err(char* m) {
 	// Constructor for error lval
 	lval* v = malloc(sizeof(lval));
@@ -99,6 +109,7 @@ void lval_del(lval* v) {
 		case LVAL_SYM: free(v->sym); break;
 		case LVAL_ERR: free(v->err); break;
 		case LVAL_SEXPR:
+		case LVAL_QEXPR:
 			for (int i = 0; i < v->count; i++) {
 				lval_del(v->cell[i]);
 			}
@@ -153,6 +164,7 @@ void lval_print(lval* v) {
 		case LVAL_NUM:   printf("%g",  v->num);        break;
 		case LVAL_SYM:   printf("%s",  v->sym);        break;
 		case LVAL_SEXPR: lval_expr_print(v, '(', ')'); break;
+		case LVAL_QEXPR: lval_expr_print(v, '{', '}'); break;
 		case LVAL_ERR:   printf("Error: %s", v->err);  break;
 	}
 }
@@ -262,12 +274,15 @@ lval* lval_read(mpc_ast_t* t) {
 	lval* v = NULL;
 	if (strcmp(t->tag, ">") == 0) { v = lval_sexpr(); }
 	if (strstr(t->tag, "sexpr"))  { v = lval_sexpr(); }
+	if (strstr(t->tag, "qexpr"))  { v = lval_qexpr(); }
 	
 	// Fill the list with any valid expression contained within
 	for (int i = 0; i < t->children_num; i++) {
+		if (strcmp(t->children[i]->tag,  "regex") == 0) { continue; }
 		if (strcmp(t->children[i]->contents, "(") == 0) { continue; }
 		if (strcmp(t->children[i]->contents, ")") == 0) { continue; }
-		if (strcmp(t->children[i]->tag,  "regex") == 0) { continue; }
+		if (strcmp(t->children[i]->contents, "{") == 0) { continue; }
+		if (strcmp(t->children[i]->contents, "}") == 0) { continue; }
 		v = lval_add(v, lval_read(t->children[i]));
 	}
 	
@@ -281,19 +296,21 @@ int main(int argc, char** argv) {
 	mpc_parser_t* Number      = mpc_new("number");
 	mpc_parser_t* Symbol      = mpc_new("symbol");
 	mpc_parser_t* Sexpr       = mpc_new("sexpr");
+	mpc_parser_t* Qexpr       = mpc_new("qexpr");
 	mpc_parser_t* Expr        = mpc_new("expr");
 	mpc_parser_t* Lsp         = mpc_new("lsp");
 
 	// Define them
 	mpca_lang(MPCA_LANG_DEFAULT,
-		"                                         \
-		number  : /-?[0-9]+(\\.[0-9]*)?/ ;        \
-		symbol  : '+' | '-' | '*' | '/' | '%' ;   \
-		sexpr   : '(' <expr>* ')' ;               \
-		expr    : <number> | <symbol> | <sexpr> ; \
-		lsp     : /^/ <expr>* /$/ ;               \
+		"                                                   \
+		number  : /-?[0-9]+(\\.[0-9]*)?/ ;                  \
+		symbol  : '+' | '-' | '*' | '/' | '%' ;             \
+		sexpr   : '(' <expr>* ')' ;                         \
+		qexpr   : '{' <expr>* '}' ;                         \
+		expr    : <number> | <symbol> | <sexpr> | <qexpr> ; \
+		lsp     : /^/ <expr>* /$/ ;                         \
 		",
-		Number, Symbol, Sexpr, Expr, Lsp);
+		Number, Symbol, Sexpr, Qexpr, Expr, Lsp);
 	
 	// Print version and exit information
 	puts("Lsp version 0.0.0.0.5");
@@ -323,7 +340,7 @@ int main(int argc, char** argv) {
 	}
 	
 	// Undefine and delete our parsers
-	mpc_cleanup(5, Number, Symbol, Sexpr, Expr, Lsp);
+	mpc_cleanup(6, Number, Symbol, Sexpr, Qexpr, Expr, Lsp);
 	
 	return 0;
 	

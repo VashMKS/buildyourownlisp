@@ -148,10 +148,22 @@ lval* lval_take(lval* v, int i) {
 }
 
 lval* lval_join(lval* v, lval* w) {
-	// Combines to S-expressions into one
+	// Combines two S-expressions into one
 	while (w->count) { v = lval_add(v, lval_pop(w, 0)); }
 	lval_del(w);
 	return v;
+}
+
+void lval_cons(lval* v, lval* w) {
+	// Appends a value to the beginning of an S-expression
+	
+	// Allocate space for one more element on the list, shift to the right and increase count
+	w->cell = realloc(w->cell, sizeof(lval*) * w->count+1);
+	memmove(&w->cell[1], &w->cell[0], sizeof(lval*) * w->count);
+	w->count++;
+	
+	// Add element to the front and then delete it
+	w->cell[0] = v;
 }
 
 void lval_print(lval* v);
@@ -222,6 +234,21 @@ lval* builtin_tail(lval* args) {
 	return v;
 }
 
+lval* builtin_init(lval* args) {
+	// Builtin function "init": Takes a Q-expression, removes the last element and returns it
+	
+	LASSERT(args, args->count == 1,
+		"Function 'init' can only take one argument");
+	LASSERT(args, args->cell[0]->type == LVAL_QEXPR,
+		"Function 'init' passed incorrect argument, must be a Q-expression");
+	LASSERT(args, args->cell[0]->count != 0,
+		"Function 'init' passed empty Q-expression, it must contain at least one element");
+	
+	lval* v = lval_take(args, 0);
+	lval_del(lval_pop(v, v->count - 1));
+	return v;
+}
+
 lval* builtin_eval(lval* args) {
 	//  Builtin function "eval": Takes a Q-expression and evaluates it as if it were an S-expression
 	
@@ -230,9 +257,9 @@ lval* builtin_eval(lval* args) {
 	LASSERT(args, args->cell[0]->type == LVAL_QEXPR,
 		"Function 'eval' passed incorrect argument, can only take Q-expression");
 	
-	lval* x = lval_take(args, 0);
-	x->type = LVAL_SEXPR;
-	return lval_eval(x);
+	lval* v = lval_take(args, 0);
+	v->type = LVAL_SEXPR;
+	return lval_eval(v);
 }
 
 lval* builtin_join(lval* args) {
@@ -243,9 +270,38 @@ lval* builtin_join(lval* args) {
 			"Function 'join' passed incorrect arguments, can only take Q-expressions");
 	}
 	
-	lval* result = lval_pop(args, 0);
-	while (args->count) { result = lval_join(result, lval_pop(args, 0)); }
+	lval* v = lval_pop(args, 0);
+	while (args->count) { v = lval_join(v, lval_pop(args, 0)); }
 	
+	lval_del(args);
+	return v;
+}
+
+lval* builtin_cons(lval* args) {
+	// Builtin function "cons": Takes a value and a Q-expression and appends it to the front
+	
+	LASSERT(args, args->count <= 2,
+		"Function 'cons' passed too many arguments, must pass exactly two arguments");
+		LASSERT(args, args->count >= 2,
+		"Function 'cons' passed too few arguments, must pass exactly two arguments");
+	LASSERT(args, args->cell[1]->type == LVAL_QEXPR,
+		"Function 'cons' passed incorrect argument, second argument must be a Q-expression");
+	
+	lval* v = lval_pop(args, 1);
+	lval_cons(lval_pop(args, 0), v);
+	lval_del(args);
+	return v;
+}
+
+lval* builtin_len(lval* args) {
+	// Builtin function "len": Takes a Q-expression and returns a number lval with its length
+	
+	LASSERT(args, args->count == 1,
+		"Function 'len' can only take one argument");
+	LASSERT(args, args->cell[0]->type == LVAL_QEXPR,
+		"Function 'len' passed incorrect argument, must be a Q-expression");
+	
+	lval* result = lval_num((double)args->cell[0]->count);
 	lval_del(args);
 	return result;
 }
@@ -300,8 +356,11 @@ lval* builtin(lval* args, char* func) {
 	if (strcmp("list", func) == 0) { return builtin_list(args); }
 	if (strcmp("head", func) == 0) { return builtin_head(args); }
 	if (strcmp("tail", func) == 0) { return builtin_tail(args); }
+	if (strcmp("init", func) == 0) { return builtin_init(args); }
 	if (strcmp("join", func) == 0) { return builtin_join(args); }
 	if (strcmp("eval", func) == 0) { return builtin_eval(args); }
+	if (strcmp("cons", func) == 0) { return builtin_cons(args); }
+	if (strcmp("len",  func) == 0) { return builtin_len(args); }
 	if (strstr("+-/*%", func))     { return builtin_op(args, func); }
 	lval_del(args);
 	return lval_err("Unknown operation"); // TODO: specify func in the error message
@@ -384,14 +443,15 @@ int main(int argc, char** argv) {
 
 	// Define them
 	mpca_lang(MPCA_LANG_DEFAULT,
-		"                                                   \
-		number  : /-?[0-9]+(\\.[0-9]*)?/ ;                  \
-		symbol  : \"list\" | \"head\" | \"tail\" | \"eval\" \
-				| \"join\" | '+' | '-' | '*' | '/' | '%' ;  \
-		sexpr   : '(' <expr>* ')' ;                         \
-		qexpr   : '{' <expr>* '}' ;                         \
-		expr    : <number> | <symbol> | <sexpr> | <qexpr> ; \
-		lsp     : /^/ <expr>* /$/ ;                         \
+		"                                                              \
+		number  : /-?[0-9]+(\\.[0-9]*)?/ ;                             \
+		symbol  : \"list\" | \"head\" | \"tail\" | \"init\"            \
+		        | \"join\" | \"cons\" | \"len\"  | \"eval\"            \
+		        | '+' | '-' | '*' | '/' | '%' ;                        \
+		sexpr   : '(' <expr>* ')' ;                                    \
+		qexpr   : '{' <expr>* '}' ;                                    \
+		expr    : <number> | <symbol> | <sexpr> | <qexpr> ;            \
+		lsp     : /^/ <expr>* /$/ ;                                    \
 		",
 		Number, Symbol, Sexpr, Qexpr, Expr, Lsp);
 	

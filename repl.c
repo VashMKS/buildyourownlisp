@@ -240,6 +240,18 @@ void lval_println(lval* v) {
 	putchar('\n');
 }
 
+char* ltype_name(int t) {
+	switch(t) {
+		case LVAL_NUM: return "Number";
+		case LVAL_SYM: return "Symbol";
+		case LVAL_FUN: return "Function";
+		case LVAL_ERR: return "Error";
+		case LVAL_SEXPR: return "S-Expression";
+		case LVAL_QEXPR: return "Q-Expression";
+		default: return "Unknown";
+	}
+}
+
 struct lenv {
 	// Lsp environment
 	int count;
@@ -309,6 +321,33 @@ void lenv_put(lenv* env, lval* k, lval* v) {
 	if (!(cond)) { lval_del(args); return lval_err(err); }
 
 lval* lval_eval(lenv* env, lval* v);
+
+lval* builtin_def(lenv* env, lval* args) {
+	// Builtin function "def": Takes symbol Q-expression and value list and registers each pair
+	
+	LASSERT(args, args->cell[0]->type == LVAL_QEXPR,
+		"Function 'def' passed incorrect type, identifier must be a Q-expression of symbols");
+	
+	// First argument is the list of symbols
+	lval* syms = args->cell[0];
+	
+	for (int i = 0; i < syms->count; i++) {
+		LASSERT(args, syms->cell[i]->type == LVAL_SYM,
+			"Function 'def' cannot define non-symbol");
+	}
+	
+	LASSERT(args, syms->count == args->count-1,
+		"Function 'def' cannot define mismatched number of values to symbols");
+	
+	for (int i = 0; i < syms->count; i++) {
+		lenv_put(env, syms->cell[i], args->cell[i+1]);
+	}
+	
+	lval_del(args);
+	
+	// On success, return empty list
+	return lval_sexpr();
+}
 
 lval* builtin_list(lenv* env, lval* args) {
 	// Builtin function "list": Takes an S-expression and converts it to a Q-expression
@@ -491,6 +530,9 @@ void lenv_add_builtin(lenv* env, char* name, lbuiltin func) {
 }
 
 void lenv_add_builtins(lenv* env) {
+	// Variable Functions
+	lenv_add_builtin(env, "def",  builtin_def);
+	
 	// List functions
 	lenv_add_builtin(env, "list", builtin_list);
 	lenv_add_builtin(env, "head", builtin_head);

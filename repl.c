@@ -46,25 +46,49 @@ typedef struct lenv lenv;
 
 typedef lval*(*lbuiltin)(lenv*, lval*);
 
+enum { // Valid lval types
+	   LVAL_NUM, LVAL_SYM,   LVAL_ERR,
+	   LVAL_FUN, LVAL_SEXPR, LVAL_QEXPR };
+
+char* ltype_name(int t) {
+	switch(t) {
+		case LVAL_NUM: return "Number";
+		case LVAL_SYM: return "Symbol";
+		case LVAL_ERR: return "Error";
+		case LVAL_FUN: return "Function";
+		case LVAL_SEXPR: return "S-Expression";
+		case LVAL_QEXPR: return "Q-Expression";
+		default: return "Unknown";
+	}
+}
+
 // Data Structures
 
 struct  lval {
-	// Lsp value
-	
 	int type;
 	
-	// Possible data that the lval holds (dependent on type)
-	double num;
-	char* sym;
-	char* err;
-	lbuiltin fun; 
+	double num; // Number
+	char* sym;  // Symbol
+	char* err;  // Error
+	
+	// Builtin function
+	lbuiltin builtin;
+	// User-defined function
+	lenv* env;
+	lval* formals;
+	lval* body;
+	
+	// Expression
 	int count;
 	lval** cell;
 };
 
-enum { // Valid lval types
-	   LVAL_NUM, LVAL_SYM,   LVAL_ERR,
-	   LVAL_FUN, LVAL_SEXPR, LVAL_QEXPR };
+struct lenv {
+	lenv* parent;
+	int count;
+	char** syms;
+	lval** vals;
+};
 
 lval* lval_num(double x) {
 	// Constructor for number lval
@@ -83,11 +107,11 @@ lval* lval_sym(char* s) {
 	return v;
 }
 
-lval* lval_fun(lbuiltin func) {
-	// Constructor for function lval
+lval* lval_builtin(lbuiltin func) {
+	// Constructor for builtin function lval
 	lval* v = malloc(sizeof(lval));
 	v->type = LVAL_FUN;
-	v->fun = func;
+	v->builtin = func;
 	return v;
 }
 
@@ -130,11 +154,32 @@ lval* lval_err(char* fmt, ...) {
 	return v;
 }
 
+lenv* lenv_new(void);
+
+lval* lval_lambda(lval* formals, lval* body) {
+	// Constructor for user-defined function lval
+	lval* v = malloc(sizeof(lval));
+	v->type = LVAL_FUN;
+	v->builtin = NULL;
+	v->env = lenv_new();
+	v->formals = formals;
+	v->body = body;
+	return v;
+}
+
+void lenv_del(lenv* env);
+
 void lval_del(lval* v) {
 	// Destructor for any kind of lval
 	switch (v->type) {
 		case LVAL_NUM: break;
-		case LVAL_FUN: break;
+		case LVAL_FUN: 
+			if (!v->builtin) {
+				lenv_del(v->env);
+				lval_del(v->formals);
+				lval_del(v->body);
+			}
+			break;
 		case LVAL_SYM: free(v->sym); break;
 		case LVAL_ERR: free(v->err); break;
 		case LVAL_QEXPR:
@@ -148,6 +193,8 @@ void lval_del(lval* v) {
 	free(v);
 }
 
+lenv* lenv_copy(lenv* env);
+
 lval* lval_copy(lval* v) {
 	// Copies an lval and returns a pointer to the copy
 	
@@ -156,7 +203,16 @@ lval* lval_copy(lval* v) {
 	
 	switch (v->type) {
 		case LVAL_NUM: x->num = v->num; break;
-		case LVAL_FUN: x->fun = v->fun; break;
+		case LVAL_FUN:
+			if (v->builtin) {
+				x->builtin = v->builtin;
+			} else {
+				x->builtin = NULL;
+				x->env = lenv_copy(v->env);
+				x->formals = lval_copy(v->formals);
+				x->body = lval_copy(v->body);
+			}
+			break;
 		case LVAL_SYM:
 			x->sym = malloc(strlen(v->sym) + 1);
 			strcpy(x->sym, v->sym);
@@ -186,10 +242,24 @@ lval* lval_add(lval* v, lval* x) {
 	return v;
 }
 
+lval* lval_join(lval* v, lval* w) {
+	// Combines two S-expressions into one
+	for (int i = 0; i < w->count; i++) { v = lval_add(v, w->cell[i]); }
+	w->count = 0; lval_del(w);
+	// The above line deletes w but not its children since they now belong to v
+	// If it causes problems, we can use
+	// free(w->cell); free(w);
+	// which was used in the book and does not depend on lval_del, but I'm a bit conflicted about 
+	// it... reasoning being that if the deleter changes in the future in a way that does not
+	// account for this, we might run into hard to spot leaks and/or double frees
+	// This comment itself, sponsored by the double free I just found here ;)
+	return v;
+}
+
 lval* lval_pop(lval* v, int i) {
 	// Takes an element from an S-expression and shifts the list back
 	
-	// Find the element we want to extract
+	// Find the element to extract
 	lval* w = v->cell[i];
 	
 	// Shift memory after the i-th element, decrease count and reallocate used memory
@@ -206,12 +276,6 @@ lval* lval_take(lval* v, int i) {
 	return w;
 }
 
-lval* lval_join(lval* v, lval* w) {
-	// Combines two S-expressions into one
-	while (w->count) { v = lval_add(v, lval_pop(w, 0)); }
-	lval_del(w);
-	return v;
-}
 
 void lval_cons(lval* v, lval* w) {
 	// Appends a value to the beginning of an S-expression
@@ -225,28 +289,10 @@ void lval_cons(lval* v, lval* w) {
 	w->cell[0] = v;
 }
 
-char* ltype_name(int t) {
-	switch(t) {
-		case LVAL_NUM: return "Number";
-		case LVAL_SYM: return "Symbol";
-		case LVAL_FUN: return "Function";
-		case LVAL_ERR: return "Error";
-		case LVAL_SEXPR: return "S-Expression";
-		case LVAL_QEXPR: return "Q-Expression";
-		default: return "Unknown";
-	}
-}
-
-struct lenv {
-	// Lsp environment
-	int count;
-	char** syms;
-	lval** vals;
-};
-
 lenv* lenv_new(void) {
 	// Constructor for lenv
 	lenv* env = malloc(sizeof(lenv));
+	env->parent = NULL;
 	env->count = 0;
 	env->syms = NULL;
 	env->vals = NULL;
@@ -264,27 +310,42 @@ void lenv_del(lenv* env) {
 	free(env);
 }
 
-lval* lenv_get(lenv* env, lval* k) {
+lenv* lenv_copy(lenv* env) {
+	lenv* new_env = malloc(sizeof(lenv));
+	new_env->parent = env->parent;
+	new_env->count  = env->count;
+	new_env->syms = malloc(sizeof(char*) * new_env->count);
+	new_env->vals = malloc(sizeof(lval*) * new_env->count);
+	for (int i = 0; i < env->count; i++) {
+		new_env->syms[i] = malloc(strlen(env->syms[i]) + 1);
+		strcpy(new_env->syms[i], env->syms[i]);
+		new_env->vals[i] = lval_copy(env->vals[i]);
+	}
+	return new_env;
+}
+
+lval* lenv_get(lenv* env, lval* key) {
 	// Searches for a given symbol in an environment, returns it if found
 	
 	for (int i = 0; i < env->count; i++) {
-		if (strcmp(env->syms[i], k->sym) == 0) {
+		if (strcmp(env->syms[i], key->sym) == 0) {
 			return lval_copy(env->vals[i]);
 		}
 	}
 	
-	return lval_err("Unbound symbol '%s'", k->sym);
+	if (env->parent) { return lenv_get(env->parent, key); }
+	else {             return lval_err("Unbound symbol '%s'", key->sym); }
 }
 
-void lenv_put(lenv* env, lval* k, lval* v) {
-	// Inserts a variable (identifier-value pair) of lvals into the environment
+void lenv_put(lenv* env, lval* key, lval* value) {
+	// Inserts a variable (identifier-value pair) of lvals into an environment
 	
 	// Check to see if the variable already exists
-	// If it is, replace it with the new value
+	// If it does, replace it with the new value
 	for (int i = 0; i < env->count; i++) {
-		if (strcmp(env->syms[i], k->sym) == 0) {
+		if (strcmp(env->syms[i], key->sym) == 0) {
 			lval_del(env->vals[i]);
-			env->vals[i] = lval_copy(v);
+			env->vals[i] = lval_copy(value);
 			return;
 		}
 	}
@@ -294,52 +355,61 @@ void lenv_put(lenv* env, lval* k, lval* v) {
 	env->vals = realloc(env->vals, sizeof(lval*) * env->count);
 	env->syms = realloc(env->syms, sizeof(char*) * env->count);
 	
-	env->vals[env->count-1] = lval_copy(v);
-	env->syms[env->count-1] = malloc(strlen(k->sym)+1);
-	strcpy(env->syms[env->count-1], k->sym);
+	env->vals[env->count-1] = lval_copy(value);
+	env->syms[env->count-1] = malloc(strlen(key->sym)+1);
+	strcpy(env->syms[env->count-1], key->sym);
 }
 
-void lval_print(lenv* env, lval* v);
+void lenv_def(lenv* env, lval* key, lval* value) {
+	// Put a variable in the outermost environment
+	while (env->parent) { env = env->parent; }
+	lenv_put(env, key, value);
+}
 
-void lval_print_fun(lenv* env, lval* v) {
-	// Does a reverse search on the environment to find and print the function name
-	for (int i = 0; i < env->count; i++) {
-		if (env->vals[i]->type == LVAL_FUN && env->vals[i]->fun == v->fun) {
-			printf("Function %s", env->syms[i]);
-			return;
-		}
+void lval_print(lval* v);
+
+void lval_print_fun(lval* v) {
+	if (v->builtin) {
+		printf("builtin function");
+	} else {
+		printf("function (");
+		lval_print(v->formals);
+		printf(" -> ");
+		// TODO: if function is curried, print bound arguments as their values and not their names
+		// Simpler alternative: print the function's env after the function's expression
+		lval_print(v->body);
+		putchar(')');
 	}
-	printf("Unknown function");
 }
 
-void lval_print_expr(lenv* env, lval* v, char open, char close) {
+void lval_print_expr(lval* v, char open, char close) {
 	putchar(open);
 	for (int i = 0; i < v->count; i++) {
-		lval_print(env, v->cell[i]);
+		lval_print(v->cell[i]);
 		if (i != (v->count-1)) { putchar(' '); }
 	}
 	putchar(close);
 }
 
-void lval_print(lenv* env, lval* v) {
+void lval_print(lval* v) {
 	switch (v->type) {
 		case LVAL_NUM:   printf("%g",  v->num);        break;
 		case LVAL_ERR:   printf("Error: %s", v->err);  break;
 		case LVAL_SYM:   printf("%s",  v->sym);        break;
-		case LVAL_FUN:   lval_print_fun(env, v);       break;
-		case LVAL_SEXPR: lval_print_expr(env, v, '(', ')'); break;
-		case LVAL_QEXPR: lval_print_expr(env, v, '{', '}'); break;
+		case LVAL_FUN:   lval_print_fun(v);            break;
+		case LVAL_SEXPR: lval_print_expr(v, '(', ')'); break;
+		case LVAL_QEXPR: lval_print_expr(v, '{', '}'); break;
 	}
 }
 
-void lval_println(lenv* env, lval* v) {
-	lval_print(env, v);
+void lval_println(lval* v) {
+	lval_print(v);
 	putchar('\n');
 }
 
 void lenv_print(lenv* env) {
 	// Prints all named values in the environment
-	printf("Named values in current environment:\n");
+	printf("Bound values:\n");
 	for (int i = 0; i < env->count; i++) {
 		printf("%s %s\n", ltype_name(env->vals[i]->type), env->syms[i]);
 	}
@@ -372,33 +442,26 @@ void lenv_print(lenv* env) {
 
 lval* lval_eval(lenv* env, lval* v);
 
-lval* builtin_def(lenv* env, lval* args) {
-	// Builtin function "def": Takes symbol and value lists and registers each pair
+lval* builtin_lambda(lenv* env, lval* args) {
+	// Builtin function "lambda": Takes a list of arguments and a body in a Q-expression and
+	// generates the proper function lval
 	
-	LASSERT_TYPE("def", args, 0, LVAL_QEXPR);
+	LASSERT_NUM_ARGS("lambda", args, 2);
+	LASSERT_TYPE("lambda", args, 0, LVAL_QEXPR);
+	LASSERT_TYPE("lambda", args, 1, LVAL_QEXPR);
 	
-	// First argument is the list of symbols
-	lval* syms = args->cell[0];
-	
-	for (int i = 0; i < syms->count; i++) {
-		LASSERT(args, (syms->cell[i]->type == LVAL_SYM),
-			"Function 'def' cannot define non-symbols. Expected %s, was given %s",
-			ltype_name(LVAL_SYM), ltype_name(syms->cell[i]->type));
+	// Formal arguments can only be symbols
+	for (int i = 0; i < args->cell[0]->count; i++) {
+		LASSERT(args, (args->cell[0]->cell[i]->type == LVAL_SYM),
+			"Function cannot take non-%s as argument, was given %s",
+			ltype_name(LVAL_SYM), ltype_name(args->cell[0]->cell[i]->type));
 	}
 	
-	LASSERT(args, (syms->count == args->count-1),
-		"Function 'def' cannot define mismatched number of values to symbols. "
-		"Was given %i symbol(s) but %i value(s).",
-		syms->count, args->count-1);
-	
-	for (int i = 0; i < syms->count; i++) {
-		lenv_put(env, syms->cell[i], args->cell[i+1]);
-	}
-	
+	lval* formals = lval_pop(args, 0);
+	lval* body = lval_pop(args, 0);
 	lval_del(args);
 	
-	// On success, return empty list
-	return lval_sexpr();
+	return lval_lambda(formals, body);
 }
 
 lval* builtin_list(lenv* env, lval* args) {
@@ -431,18 +494,6 @@ lval* builtin_tail(lenv* env, lval* args) {
 	return v;
 }
 
-lval* builtin_init(lenv* env, lval* args) {
-	// Builtin function "init": Takes a Q-expression, removes the last element and returns it
-	
-	LASSERT_NUM_ARGS("init", args, 1);
-	LASSERT_TYPE("init", args, 0, LVAL_QEXPR);
-	LASSERT_NON_EMPTY("init", args, 0);
-	
-	lval* v = lval_take(args, 0);
-	lval_del(lval_pop(v, v->count - 1));
-	return v;
-}
-
 lval* builtin_eval(lenv* env, lval* args) {
 	//  Builtin function "eval": Takes a Q-expression and evaluates it as if it were an S-expression
 	
@@ -465,6 +516,91 @@ lval* builtin_join(lenv* env, lval* args) {
 	while (args->count) { v = lval_join(v, lval_pop(args, 0)); }
 	
 	lval_del(args);
+	return v;
+}
+
+lval* builtin_var(lenv* env, lval* args, char* func) {
+	
+	LASSERT_TYPE(func, args, 0, LVAL_QEXPR);
+	
+	// First argument is the list of symbols
+	lval* syms = args->cell[0];
+	
+	for (int i = 0; i < syms->count; i++) {
+		LASSERT(args, (syms->cell[i]->type == LVAL_SYM),
+			"Function '%s' cannot define non-symbols. Expected %s, was given %s",
+			func, ltype_name(LVAL_SYM), ltype_name(syms->cell[i]->type));
+	}
+	
+	LASSERT(args, (syms->count == args->count-1),
+		"Function '%s' cannot define mismatched number of values to symbols. "
+		"Was given %i symbol(s) but %i value(s).",
+		func, syms->count, args->count-1);
+	
+	for (int i = 0; i < syms->count; i++) {
+		if (strcmp(func, "def") == 0) { lenv_def(env, syms->cell[i], args->cell[i+1]); }
+		if (strcmp(func, "=")   == 0) { lenv_put(env, syms->cell[i], args->cell[i+1]); }
+	}
+	
+	lval_del(args);
+	return lval_sexpr();  // On success, return empty list
+}
+
+lval* builtin_def(lenv* env, lval* args) {
+	// Builtin function "def": Takes symbol and value lists and registers each pair
+	// to the outermost environment
+	return builtin_var(env, args, "def");
+}
+
+lval* builtin_put(lenv* env, lval* args) {
+	// Builtin function "=": Takes symbol and value lists and registers each pair
+	// to the environment
+	return builtin_var(env, args, "=");
+}
+
+lval* builtin_fun(lenv* env, lval* args) {
+	// Builtin function "fun": Takes a name, argument Q-expression and body Q-expression and
+	// defines that function. Same as combining def and lambda
+	
+	LASSERT_NUM_ARGS("fun", args, 2)
+	LASSERT_TYPE("fun", args, 0, LVAL_QEXPR);
+	LASSERT_TYPE("fun", args, 1, LVAL_QEXPR);
+	
+	// First element of first list must be the name of the function i.e. a symbol
+	LASSERT(args, (args->cell[0]->count >= 1), "Invalid function definition. Must give a name");
+	LASSERT(args, (args->cell[0]->cell[0]->type == LVAL_SYM),
+		"Invalid function definition. "
+		"First element of argument 0 (function name) must be %s, was given %s",
+		ltype_name(LVAL_SYM), ltype_name(args->cell[0]->type));
+	
+	// Formal arguments can only be symbols
+	for (int i = 1; i < args->cell[0]->count; i++) {
+		LASSERT(args, (args->cell[0]->cell[i]->type == LVAL_SYM),
+			"Function cannot take non-%s as argument, was given %s",
+			ltype_name(LVAL_SYM), ltype_name(args->cell[0]->cell[i]->type));
+	}
+	
+	// Get the name and wrap it into a Q-expression
+	lval* syms = lval_qexpr();
+	lval_add(syms, lval_pop(args->cell[0], 0));
+	
+	// Wrap the name and function into an S-expression for builtin_def
+	lval* def_args = lval_sexpr();
+	lval_add(def_args, syms);
+	lval_add(def_args, builtin_lambda(env, args));
+	
+	return builtin_def(env, def_args);
+}
+
+lval* builtin_init(lenv* env, lval* args) {
+	// Builtin function "init": Takes a Q-expression, removes the last element and returns it
+	
+	LASSERT_NUM_ARGS("init", args, 1);
+	LASSERT_TYPE("init", args, 0, LVAL_QEXPR);
+	LASSERT_NON_EMPTY("init", args, 0);
+	
+	lval* v = lval_take(args, 0);
+	lval_del(lval_pop(v, v->count - 1));
 	return v;
 }
 
@@ -532,25 +668,11 @@ lval* builtin_op(lenv* env, lval* args, char* op) {
 	return x;
 }
 
-lval* builtin_add(lenv* env, lval* args) {
-	return builtin_op(env, args, "+");
-}
-
-lval* builtin_sub(lenv* env, lval* args) {
-	return builtin_op(env, args, "-");
-}
-
-lval* builtin_mul(lenv* env, lval* args) {
-	return builtin_op(env, args, "*");
-}
-
-lval* builtin_div(lenv* env, lval* args) {
-	return builtin_op(env, args, "/");
-}
-
-lval* builtin_mod(lenv* env, lval* args) {
-	return builtin_op(env, args, "%");
-}
+lval* builtin_add(lenv* env, lval* args) { return builtin_op(env, args, "+"); }
+lval* builtin_sub(lenv* env, lval* args) { return builtin_op(env, args, "-"); }
+lval* builtin_mul(lenv* env, lval* args) { return builtin_op(env, args, "*"); }
+lval* builtin_div(lenv* env, lval* args) { return builtin_op(env, args, "/"); }
+lval* builtin_mod(lenv* env, lval* args) { return builtin_op(env, args, "%"); }
 
 lval* builtin_print_env(lenv* env, lval* args) {
 	// Builtin function "env": prints all named values in the environment
@@ -560,12 +682,12 @@ lval* builtin_print_env(lenv* env, lval* args) {
 
 lval* builtin_exit() {
 	// Builtin function "exit": returns an error code that tells the REPL to end the session
-	return lval_err("EXIT SEQUENCE");
+	return lval_err("LSP_REPL_EXIT_SEQUENCE");
 }
 
 void lenv_add_builtin(lenv* env, char* name, lbuiltin func) {
 	lval* k = lval_sym(name);
-	lval* v = lval_fun(func);
+	lval* v = lval_builtin(func);
 	lenv_put(env, k, v);
 	// lenv_put registers copies of the passed values so we must delete them now
 	lval_del(k); lval_del(v);
@@ -573,11 +695,14 @@ void lenv_add_builtin(lenv* env, char* name, lbuiltin func) {
 
 void lenv_add_builtins(lenv* env) {
 	// REPL functions
-	lenv_add_builtin(env, "exit",  builtin_exit);
+	lenv_add_builtin(env, "exit", builtin_exit);
 
 	// Variable functions
-	lenv_add_builtin(env, "def",  builtin_def);
-	lenv_add_builtin(env, "env",  builtin_print_env);
+	lenv_add_builtin(env, "def", builtin_def);
+	lenv_add_builtin(env, "=",   builtin_put);
+	lenv_add_builtin(env, "lambda", builtin_lambda);
+	lenv_add_builtin(env, "fun", builtin_fun);
+	lenv_add_builtin(env, "env", builtin_print_env);
 	
 	// List functions
 	lenv_add_builtin(env, "list", builtin_list);
@@ -599,6 +724,67 @@ void lenv_add_builtins(lenv* env) {
 
 // Evaluation
 
+lval* lval_call(lenv* env, lval* f, lval* args) {
+	// Evaluate a function lval with the given input arguments
+	
+	// If builtin, simply use the stored function pointer
+	if (f->builtin) { return f->builtin(env, args); }
+	
+	int given = args->count;
+	int total = f->formals->count;
+	
+	while (args->count) {
+		if (f->formals->count == 0) {
+			lval_del(args);
+			return lval_err("Function passed too many arguments. Expected %i, was given %i",
+							total, given);
+		}
+		// Bind the next formal argument to the next provided value
+		lval* sym = lval_pop(f->formals, 0);
+		
+		// Special case: variable length arguments
+		if (strcmp(sym->sym, "&") == 0) {
+			if (f->formals->count != 1) {
+				lval_del(args);
+				return lval_err("Invalid function call. "
+				                "'&' must be followed by a single symbol, got %i",
+				                f->formals->count);
+			}
+			// Next (i.e. the last) formal must be bound to the remaining arguments
+			lval* nsym = lval_pop(f->formals, 0);
+			lenv_put(f->env, nsym, builtin_list(env, args));
+			lval_del(sym); lval_del(nsym);
+			break;
+		}
+		
+		lval* val = lval_pop(args, 0);
+		lenv_put(f->env, sym, val);
+		lval_del(sym); lval_del(val);
+	}
+	
+	lval_del(args);
+	
+	// Handle variable arguments ('&') with 0 optional arguments passed by binding an empty list
+	if (f->formals->count > 0 && strcmp(f->formals->cell[0]->sym, "&") == 0) {
+		if (f->formals->count != 2) {
+			return lval_err("Function format invalid. "
+			                "'&' must be followed by a single symbol, got %i",
+			                f->formals->count);
+		}
+		lval_del(lval_pop(f->formals, 0));
+		lval* sym = lval_pop(f->formals, 0);
+		lval* val = lval_qexpr();
+		lenv_put(f->env, sym, val);
+		lval_del(sym); lval_del(val);
+	}
+	
+	// If all formals have been bound then evaluate
+	if (f->formals->count == 0) {
+		f->env->parent = env;  // parent env in the function is the one from which it is called
+		return builtin_eval(f->env, lval_add(lval_sexpr(), lval_copy(f->body)));
+	} else { return lval_copy(f); /* Otherwise return partially evaluated function (currying) */ }
+}
+
 lval* lval_eval_sexpr(lenv* env, lval* v) {
 	// Evaluate children
 	for (int i = 0; i < v->count; i++) {
@@ -612,20 +798,20 @@ lval* lval_eval_sexpr(lenv* env, lval* v) {
 	
 	// Check for empty or single expression
 	if (v->count == 0) { return v; }
-	if (v->count == 1) { return lval_take(v, 0); }
+	if (v->count == 1) { return lval_eval(env, lval_take(v, 0)); }
 	
 	// Ensure first element is a function after evaluation
 	lval* f = lval_pop(v, 0);
 	if (f->type != LVAL_FUN) {
-		int type = f->type;
+		lval* error = lval_err("S-expression starts with incorrect type. "
+							   "Expected %s, was given %s",
+							   ltype_name(LVAL_FUN), ltype_name(f->type));
 		lval_del(f); lval_del(v);
-		lval* error = lval_err("S-expression starts with incorrect type. Expected %s, was given %s",
-							   ltype_name(LVAL_FUN), ltype_name(type));
 		return error;
 	}
 	
 	// If so, call the function
-	lval* result = f->fun(env, v);
+	lval* result = lval_call(env, f, v);
 	lval_del(f);
 	return result;
 }
@@ -698,7 +884,7 @@ int main(int argc, char** argv) {
 		Number, Symbol, Sexpr, Qexpr, Expr, Lsp);
 	
 	// Print version and exit information
-	puts("Lsp version 0.0.0.0.7");
+	puts("Lsp version 0.0.0.0.8");
 	puts("Ctrl+C to exit\n");
 	
 	// Initialise environment
@@ -717,13 +903,13 @@ int main(int argc, char** argv) {
 		if (mpc_parse("<stdin>", input, Lsp, &r)) {
 			// On success evaluate AST and print result
 			lval* result = lval_eval(env, lval_read(r.output));
-			if (result->type == LVAL_ERR && strcmp(result->err, "EXIT SEQUENCE") == 0) {
+			if (result->type == LVAL_ERR && strcmp(result->err, "LSP_REPL_EXIT_SEQUENCE") == 0) {
 				// TODO: this is a VERY janky way to exit the terminal by reserving a certain error
 				// code. Unsure of how to do a better method that does not involve polluting the
 				// namespace or too much unnecessary computation
 				break;
 			}
-			lval_println(env, result);
+			lval_println(result);
 			lval_del(result);
 			mpc_ast_delete(r.output);
 		} else {

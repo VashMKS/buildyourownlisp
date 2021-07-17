@@ -1,3 +1,5 @@
+#include <stdbool.h>
+
 // #include with "" instead of <> searches local folder first
 #include "mpc.h"  // micro parser combinator lib
 
@@ -234,6 +236,33 @@ lval* lval_copy(lval* v) {
 	return x;
 }
 
+double lval_eq(lval* x, lval* y) {
+	if (x->type != y->type) { return 0; }
+	
+	switch (x->type) {
+		case LVAL_NUM: return (x->num == y->num);
+		case LVAL_SYM: return (strcmp(x->sym, y->sym) == 0);
+		case LVAL_ERR: return (strcmp(x->err, y->err) == 0);
+		case LVAL_FUN:
+			if (x->builtin || y->builtin) {
+				return (x->builtin == y->builtin);
+			} else {
+				// user-defined functions on different scopes are the same
+				return (lval_eq(x->formals, y->formals)
+						&& lval_eq(x->formals, y->formals));
+			}
+		case LVAL_SEXPR:
+		case LVAL_QEXPR:
+			if (x->count != y->count) { return 0; }
+			for (int i = 0; i < x->count; i++) {
+				if (!lval_eq(x->cell[i], y->cell[i])) { return 0; }
+			}
+			return 1;
+		break;
+	}
+	return 0;
+}
+
 lval* lval_add(lval* v, lval* x) {
 	// Appends an lval to an S-expression lval
 	v->count++;
@@ -430,7 +459,7 @@ void lenv_print(lenv* env) {
 		"Function '%s' passed incorrect type for argument %i. Expected %s, was given %s", \
 		func, index, ltype_name(expected), ltype_name(args->cell[index]->type));
 
-#define LASSERT_NUM_ARGS(func, args, n) \
+#define LASSERT_NUM(func, args, n) \
 	LASSERT(args, args->count == n, \
 		"Function '%s' passed incorrect number of arguments. Expected %i, was given %i", \
 		func, n, args->count);
@@ -446,7 +475,7 @@ lval* builtin_lambda(lenv* env, lval* args) {
 	// Builtin function "lambda": Takes a list of arguments and a body in a Q-expression and
 	// generates the proper function lval
 	
-	LASSERT_NUM_ARGS("lambda", args, 2);
+	LASSERT_NUM("lambda", args, 2);
 	LASSERT_TYPE("lambda", args, 0, LVAL_QEXPR);
 	LASSERT_TYPE("lambda", args, 1, LVAL_QEXPR);
 	
@@ -473,7 +502,7 @@ lval* builtin_list(lenv* env, lval* args) {
 lval* builtin_head(lenv* env, lval* args) {
 	// Builtin function "head": Takes a Q-expression and returns the first element
 	
-	LASSERT_NUM_ARGS("head", args, 1);
+	LASSERT_NUM("head", args, 1);
 	LASSERT_TYPE("head", args, 0, LVAL_QEXPR);
 	LASSERT_NON_EMPTY("head", args, 0);
 	
@@ -485,7 +514,7 @@ lval* builtin_head(lenv* env, lval* args) {
 lval* builtin_tail(lenv* env, lval* args) {
 	// Builtin function "tail": Takes a Q-expression, removes the first element and returns it
 	
-	LASSERT_NUM_ARGS("tail", args, 1);
+	LASSERT_NUM("tail", args, 1);
 	LASSERT_TYPE("tail", args, 0, LVAL_QEXPR);
 	LASSERT_NON_EMPTY("tail", args, 0);
 	
@@ -497,7 +526,7 @@ lval* builtin_tail(lenv* env, lval* args) {
 lval* builtin_eval(lenv* env, lval* args) {
 	//  Builtin function "eval": Takes a Q-expression and evaluates it as if it were an S-expression
 	
-	LASSERT_NUM_ARGS("eval", args, 1)
+	LASSERT_NUM("eval", args, 1)
 	LASSERT_TYPE("eval", args, 0, LVAL_QEXPR);
 	
 	lval* v = lval_take(args, 0);
@@ -562,7 +591,7 @@ lval* builtin_fun(lenv* env, lval* args) {
 	// Builtin function "fun": Takes a name, argument Q-expression and body Q-expression and
 	// defines that function. Same as combining def and lambda
 	
-	LASSERT_NUM_ARGS("fun", args, 2)
+	LASSERT_NUM("fun", args, 2)
 	LASSERT_TYPE("fun", args, 0, LVAL_QEXPR);
 	LASSERT_TYPE("fun", args, 1, LVAL_QEXPR);
 	
@@ -595,7 +624,7 @@ lval* builtin_fun(lenv* env, lval* args) {
 lval* builtin_init(lenv* env, lval* args) {
 	// Builtin function "init": Takes a Q-expression, removes the last element and returns it
 	
-	LASSERT_NUM_ARGS("init", args, 1);
+	LASSERT_NUM("init", args, 1);
 	LASSERT_TYPE("init", args, 0, LVAL_QEXPR);
 	LASSERT_NON_EMPTY("init", args, 0);
 	
@@ -607,7 +636,7 @@ lval* builtin_init(lenv* env, lval* args) {
 lval* builtin_cons(lenv* env, lval* args) {
 	// Builtin function "cons": Takes a value and a Q-expression and appends it to the front
 	
-	LASSERT_NUM_ARGS("cons", args, 2)
+	LASSERT_NUM("cons", args, 2)
 	LASSERT_TYPE("cons", args, 1, LVAL_QEXPR);
 	
 	lval* v = lval_pop(args, 1);
@@ -618,7 +647,7 @@ lval* builtin_cons(lenv* env, lval* args) {
 lval* builtin_len(lenv* env, lval* args) {
 	// Builtin function "len": Takes a Q-expression and returns a number lval with its length
 	
-	LASSERT_NUM_ARGS("len", args, 1)
+	LASSERT_NUM("len", args, 1)
 	LASSERT_TYPE("len", args, 0, LVAL_QEXPR);
 	
 	lval* result = lval_num((double)args->cell[0]->count);
@@ -674,6 +703,104 @@ lval* builtin_mul(lenv* env, lval* args) { return builtin_op(env, args, "*"); }
 lval* builtin_div(lenv* env, lval* args) { return builtin_op(env, args, "/"); }
 lval* builtin_mod(lenv* env, lval* args) { return builtin_op(env, args, "%"); }
 
+lval* builtin_ord(lenv* env, lval* args, char* op) {
+	// Builtin order comparison operators: Test for order between two number lvals
+	
+	LASSERT_NUM(op, args, 2);
+	LASSERT_TYPE(op, args, 0, LVAL_NUM);
+	LASSERT_TYPE(op, args, 1, LVAL_NUM);
+	
+	double result;
+	if (strcmp(op, ">")  == 0) { result = (args->cell[0]->num >  args->cell[1]->num); }
+	if (strcmp(op, "<")  == 0) { result = (args->cell[0]->num <  args->cell[1]->num); }
+	if (strcmp(op, ">=") == 0) { result = (args->cell[0]->num >= args->cell[1]->num); }
+	if (strcmp(op, "<=") == 0) { result = (args->cell[0]->num <= args->cell[1]->num); }
+	
+	lval_del(args);
+	return lval_num(result);
+}
+
+lval* builtin_gt(lenv* env, lval* args) { return builtin_ord(env, args, ">");  }
+lval* builtin_lt(lenv* env, lval* args) { return builtin_ord(env, args, "<");  }
+lval* builtin_ge(lenv* env, lval* args) { return builtin_ord(env, args, ">="); }
+lval* builtin_le(lenv* env, lval* args) { return builtin_ord(env, args, "<="); }
+
+lval* builtin_cmp(lenv* env, lval* args, char* op) {
+	// Builtin (non-)equailty operators: Test for equality for two lvals
+	
+	LASSERT_NUM(op, args, 2);
+	
+	double result = lval_eq(args->cell[0], args->cell[1]);
+	if (strcmp(op, "!=") == 0) { result = !result; }
+	
+	lval_del(args);
+	return lval_num(result);
+}
+
+lval* builtin_eq(lenv* env, lval* args) { return builtin_cmp(env, args, "=="); }
+lval* builtin_ne(lenv* env, lval* args) { return builtin_cmp(env, args, "!="); }
+
+lval* builtin_logical(lenv* env, lval* args, char* op) {
+	// Builtin logical operators: Apply to one or more number lvals (treated as booleans)
+	
+	for (int i = 0; i < args->count; i++) {
+		LASSERT_TYPE(op, args, i, LVAL_NUM);
+	}
+	
+	bool res;
+	
+	if (strcmp(op, "!") == 0) {
+		LASSERT_NUM(op, args, 1);
+		res = (! args->cell[0]->num);
+	}
+	
+	if (strcmp(op, "||") == 0) {
+		res = false;
+		for (int i = 0; i < args->count; i++) {
+			res = res || args->cell[i]->num;
+		}
+	}
+	
+	if (strcmp(op, "&&") == 0) {
+		res = true;
+		for (int i = 0; i < args->count; i++) {
+			res = res && args->cell[i]->num;
+		}
+	}
+	
+	lval_del(args);
+	
+	lval* result = res ? lval_num(1) : lval_num(0);
+	return result;
+}
+
+lval* builtin_or(lenv* env,  lval* args) { return builtin_logical(env, args, "||"); }
+lval* builtin_and(lenv* env, lval* args) { return builtin_logical(env, args, "&&"); }
+lval* builtin_not(lenv* env, lval* args) { return builtin_logical(env, args, "!");  }
+
+lval* builtin_if(lenv* env, lval* args) {
+	// Builtin function "if": Basic 'if cond then else' statement, where 'cond' is a number lval and
+	// 'then' and 'else' are Q-Expressions that are evaluated based on whether cond is zero (False)
+	// or not (True)
+	
+	LASSERT_NUM("if", args, 3);
+	LASSERT_TYPE("if", args, 0, LVAL_NUM);
+	LASSERT_TYPE("if", args, 1, LVAL_QEXPR);
+	LASSERT_TYPE("if", args, 2, LVAL_QEXPR);
+	
+	lval* x;
+	if (args->cell[0]->num) {
+		args->cell[1]->type = LVAL_SEXPR;
+		x = lval_eval(env, lval_pop(args, 1));
+	} else {
+		args->cell[2]->type = LVAL_SEXPR;
+		x = lval_eval(env, lval_pop(args, 2));
+	}
+	
+	lval_del(args);
+	return x;
+}
+
 lval* builtin_print_env(lenv* env, lval* args) {
 	// Builtin function "env": prints all named values in the environment
 	lenv_print(env);
@@ -704,6 +831,27 @@ void lenv_add_builtins(lenv* env) {
 	lenv_add_builtin(env, "fun", builtin_fun);
 	lenv_add_builtin(env, "env", builtin_print_env);
 	
+	// Comparison functions
+	lenv_add_builtin(env, "if", builtin_if);
+	lenv_add_builtin(env, "==", builtin_eq);
+	lenv_add_builtin(env, "!=", builtin_ne);
+	lenv_add_builtin(env, "<",  builtin_lt);
+	lenv_add_builtin(env, "<=", builtin_le);
+	lenv_add_builtin(env, ">",  builtin_gt);
+	lenv_add_builtin(env, ">=", builtin_ge);
+	
+	// Logical functions
+	lenv_add_builtin(env, "||", builtin_or);
+	lenv_add_builtin(env, "&&", builtin_and);
+	lenv_add_builtin(env, "!",  builtin_not);
+	
+	// Arithmetic functions
+	lenv_add_builtin(env, "+", builtin_add);
+	lenv_add_builtin(env, "-", builtin_sub);
+	lenv_add_builtin(env, "*", builtin_mul);
+	lenv_add_builtin(env, "/", builtin_div);
+	lenv_add_builtin(env, "%", builtin_mod);
+	
 	// List functions
 	lenv_add_builtin(env, "list", builtin_list);
 	lenv_add_builtin(env, "head", builtin_head);
@@ -713,13 +861,6 @@ void lenv_add_builtins(lenv* env) {
 	lenv_add_builtin(env, "join", builtin_join);
 	lenv_add_builtin(env, "cons", builtin_cons);
 	lenv_add_builtin(env, "len", builtin_len);
-	
-	// Arithmetic functions
-	lenv_add_builtin(env, "+", builtin_add);
-	lenv_add_builtin(env, "-", builtin_sub);
-	lenv_add_builtin(env, "*", builtin_mul);
-	lenv_add_builtin(env, "/", builtin_div);
-	lenv_add_builtin(env, "%", builtin_mod);
 }
 
 // Evaluation
@@ -875,7 +1016,7 @@ int main(int argc, char** argv) {
 	mpca_lang(MPCA_LANG_DEFAULT,
 		"                                                   \
 		number  : /-?[0-9]+(\\.[0-9]*)?/ ;                  \
-		symbol  : /[a-zA-Z0-9_+\\-*\\/%\\\\=<>!&]+/ ;       \
+		symbol  : /[a-zA-Z0-9_+\\-*\\/%\\\\=<>!|&]+/ ;      \
 		sexpr   : '(' <expr>* ')' ;                         \
 		qexpr   : '{' <expr>* '}' ;                         \
 		expr    : <number> | <symbol> | <sexpr> | <qexpr> ; \

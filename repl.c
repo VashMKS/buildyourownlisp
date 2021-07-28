@@ -1,5 +1,3 @@
-#include <stdbool.h>
-
 // #include with "" instead of <> searches local folder first
 #include "mpc.h"  // micro parser combinator lib
 
@@ -49,18 +47,20 @@ typedef struct lenv lenv;
 typedef lval*(*lbuiltin)(lenv*, lval*);
 
 enum { // Valid lval types
-	   LVAL_NUM, LVAL_SYM,   LVAL_ERR,
-	   LVAL_FUN, LVAL_SEXPR, LVAL_QEXPR };
+	   LVAL_NUM, LVAL_SYM, LVAL_BOOL,
+	   LVAL_ERR, LVAL_FUN, LVAL_SEXPR,
+	   LVAL_QEXPR };
 
 char* ltype_name(int t) {
 	switch(t) {
-		case LVAL_NUM: return "Number";
-		case LVAL_SYM: return "Symbol";
-		case LVAL_ERR: return "Error";
-		case LVAL_FUN: return "Function";
+		case LVAL_NUM:   return "Number";
+		case LVAL_SYM:   return "Symbol";
+		case LVAL_BOOL:  return "Boolean";
+		case LVAL_ERR:   return "Error";
+		case LVAL_FUN:   return "Function";
 		case LVAL_SEXPR: return "S-Expression";
 		case LVAL_QEXPR: return "Q-Expression";
-		default: return "Unknown";
+		default:         return "Unknown";
 	}
 }
 
@@ -69,12 +69,11 @@ char* ltype_name(int t) {
 struct  lval {
 	int type;
 	
-	double num; // Number
-	char* sym;  // Symbol
-	char* err;  // Error
+	double num;       // Number / Boolean
+	char* sym;        // Symbol
+	char* err;        // Error
+	lbuiltin builtin; // Builtin function
 	
-	// Builtin function
-	lbuiltin builtin;
 	// User-defined function
 	lenv* env;
 	lval* formals;
@@ -101,11 +100,19 @@ lval* lval_num(double x) {
 }
 
 lval* lval_sym(char* s) {
-	// Constructor symbol lval
+	// Constructor for symbol lval
 	lval* v = malloc(sizeof(lval));
 	v->type = LVAL_SYM;
 	v->sym = malloc(strlen(s)+1);
 	strcpy(v->sym, s);
+	return v;
+}
+
+lval* lval_bool(double x) {
+	// Constructor for boolean lval
+	lval* v = malloc(sizeof(lval));
+	v->type = LVAL_BOOL;
+	v->num = x;
 	return v;
 }
 
@@ -175,6 +182,7 @@ void lval_del(lval* v) {
 	// Destructor for any kind of lval
 	switch (v->type) {
 		case LVAL_NUM: break;
+		case LVAL_BOOL: break;
 		case LVAL_FUN: 
 			if (!v->builtin) {
 				lenv_del(v->env);
@@ -204,6 +212,7 @@ lval* lval_copy(lval* v) {
 	x->type = v->type;
 	
 	switch (v->type) {
+		case LVAL_BOOL:
 		case LVAL_NUM: x->num = v->num; break;
 		case LVAL_FUN:
 			if (v->builtin) {
@@ -240,9 +249,10 @@ double lval_eq(lval* x, lval* y) {
 	if (x->type != y->type) { return 0; }
 	
 	switch (x->type) {
-		case LVAL_NUM: return (x->num == y->num);
-		case LVAL_SYM: return (strcmp(x->sym, y->sym) == 0);
-		case LVAL_ERR: return (strcmp(x->err, y->err) == 0);
+		case LVAL_BOOL: return (x->num ? y->num : !y->num);
+		case LVAL_NUM:  return (x->num == y->num);
+		case LVAL_SYM:  return (strcmp(x->sym, y->sym) == 0);
+		case LVAL_ERR:  return (strcmp(x->err, y->err) == 0);
 		case LVAL_FUN:
 			if (x->builtin || y->builtin) {
 				return (x->builtin == y->builtin);
@@ -397,6 +407,11 @@ void lenv_def(lenv* env, lval* key, lval* value) {
 
 void lval_print(lval* v);
 
+void lval_print_bool(lval* v) {
+	if (v->num) { printf("true");  }
+	else        { printf("false"); }
+}
+
 void lval_print_fun(lval* v) {
 	if (v->builtin) {
 		printf("builtin function");
@@ -426,6 +441,7 @@ void lval_print(lval* v) {
 		case LVAL_ERR:   printf("Error: %s", v->err);  break;
 		case LVAL_SYM:   printf("%s",  v->sym);        break;
 		case LVAL_FUN:   lval_print_fun(v);            break;
+		case LVAL_BOOL:  lval_print_bool(v);           break;
 		case LVAL_SEXPR: lval_print_expr(v, '(', ')'); break;
 		case LVAL_QEXPR: lval_print_expr(v, '{', '}'); break;
 	}
@@ -717,7 +733,7 @@ lval* builtin_ord(lenv* env, lval* args, char* op) {
 	if (strcmp(op, "<=") == 0) { result = (args->cell[0]->num <= args->cell[1]->num); }
 	
 	lval_del(args);
-	return lval_num(result);
+	return lval_bool(result);
 }
 
 lval* builtin_gt(lenv* env, lval* args) { return builtin_ord(env, args, ">");  }
@@ -734,20 +750,20 @@ lval* builtin_cmp(lenv* env, lval* args, char* op) {
 	if (strcmp(op, "!=") == 0) { result = !result; }
 	
 	lval_del(args);
-	return lval_num(result);
+	return lval_bool(result);
 }
 
 lval* builtin_eq(lenv* env, lval* args) { return builtin_cmp(env, args, "=="); }
 lval* builtin_ne(lenv* env, lval* args) { return builtin_cmp(env, args, "!="); }
 
 lval* builtin_logical(lenv* env, lval* args, char* op) {
-	// Builtin logical operators: Apply to one or more number lvals (treated as booleans)
+	// Builtin logical operators: Apply to one or more boolean lvals
 	
 	for (int i = 0; i < args->count; i++) {
-		LASSERT_TYPE(op, args, i, LVAL_NUM);
+		LASSERT_TYPE(op, args, i, LVAL_BOOL);
 	}
 	
-	bool res;
+	double res;
 	
 	if (strcmp(op, "!") == 0) {
 		LASSERT_NUM(op, args, 1);
@@ -755,23 +771,21 @@ lval* builtin_logical(lenv* env, lval* args, char* op) {
 	}
 	
 	if (strcmp(op, "||") == 0) {
-		res = false;
+		res = 0;
 		for (int i = 0; i < args->count; i++) {
 			res = res || args->cell[i]->num;
 		}
 	}
 	
 	if (strcmp(op, "&&") == 0) {
-		res = true;
+		res = 1;
 		for (int i = 0; i < args->count; i++) {
 			res = res && args->cell[i]->num;
 		}
 	}
 	
 	lval_del(args);
-	
-	lval* result = res ? lval_num(1) : lval_num(0);
-	return result;
+	return lval_bool(res);
 }
 
 lval* builtin_or(lenv* env,  lval* args) { return builtin_logical(env, args, "||"); }
@@ -784,7 +798,7 @@ lval* builtin_if(lenv* env, lval* args) {
 	// or not (True)
 	
 	LASSERT_NUM("if", args, 3);
-	LASSERT_TYPE("if", args, 0, LVAL_NUM);
+	LASSERT_TYPE("if", args, 0, LVAL_BOOL);
 	LASSERT_TYPE("if", args, 1, LVAL_QEXPR);
 	LASSERT_TYPE("if", args, 2, LVAL_QEXPR);
 	
@@ -980,7 +994,11 @@ lval* lval_read_num(mpc_ast_t* t) {
 lval* lval_read(mpc_ast_t* t) {
 
 	if (strstr(t->tag, "number")) { return lval_read_num(t); }
-	if (strstr(t->tag, "symbol")) { return lval_sym(t->contents); }
+	if (strstr(t->tag, "symbol")) {
+		if (strcmp(t->contents, "true")  == 0) { return lval_bool(1); }
+		if (strcmp(t->contents, "false") == 0) { return lval_bool(0); }
+		else { return lval_sym(t->contents); }
+	}
 	
 	// If root (>) or sexpr then create empty list
 	lval* v = NULL;
@@ -1025,7 +1043,7 @@ int main(int argc, char** argv) {
 		Number, Symbol, Sexpr, Qexpr, Expr, Lsp);
 	
 	// Print version and exit information
-	puts("Lsp version 0.0.0.0.8");
+	puts("Lsp version 0.0.0.0.9");
 	puts("Ctrl+C to exit\n");
 	
 	// Initialise environment
@@ -1047,7 +1065,8 @@ int main(int argc, char** argv) {
 			if (result->type == LVAL_ERR && strcmp(result->err, "LSP_REPL_EXIT_SEQUENCE") == 0) {
 				// TODO: this is a VERY janky way to exit the terminal by reserving a certain error
 				// code. Unsure of how to do a better method that does not involve polluting the
-				// namespace or too much unnecessary computation
+				// namespace or too much unnecessary computation. It'll be simpler once the
+				// interpreter and the REPL are separate entities
 				break;
 			}
 			lval_println(result);

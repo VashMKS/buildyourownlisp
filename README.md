@@ -27,19 +27,21 @@ git clone git@github.com:orangeduck/mpc.git
 cp mpc/{mpc.c,mpc.h} buildyourownlisp/src/
 ```
 
+I've included a copy of MPC to keep the project simple and portable, but you'll likely want to get the latest version from upstream.
+
 ### Compiling, running and debugging
 
 ```bash
 # compile and link against mpc, libedit and math
-gcc -std=c99 -Wall prompt.c mpc.c -ledit -lm -o prompt
+gcc -std=c99 -Wall repl.c mpc.c -ledit -lm -o lsp
 
 # run resulting executable
-./prompt
+./lsp
 ```
 
 ```bash
 # compile debug executable and start debug session with dbg
 # same as above plus -g flag
-gcc -std=c99 -Wall -g prompt.c mpc.c -ledit -lm -o prompt
-gdb prompt
+gcc -std=c99 -Wall -g repl.c mpc.c -ledit -lm -o lsp
+gdb lsp
 ```

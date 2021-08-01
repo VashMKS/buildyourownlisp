@@ -38,6 +38,15 @@ void add_history(char* unused) {}
 
 // Forward declarations
 
+mpc_parser_t* Number;
+mpc_parser_t* Symbol;
+mpc_parser_t* String;
+mpc_parser_t* Comment;
+mpc_parser_t* Sexpr;
+mpc_parser_t* Qexpr;
+mpc_parser_t* Expr;
+mpc_parser_t* Lsp;
+
 struct lval;
 struct lenv;
 
@@ -119,6 +128,7 @@ lval* lval_bool(double x) {
 }
 
 lval* lval_str(char* s) {
+	// Constructor for string lval
 	lval* v = malloc(sizeof(lval));
 	v->type = LVAL_STR;
 	v->str = malloc(strlen(s)+1);
@@ -846,6 +856,48 @@ lval* builtin_print_env(lenv* env, lval* args) {
 	return lval_sexpr();
 }
 
+lval* lval_read(mpc_ast_t* t);
+
+lval* builtin_load(lenv* env, lval* args) {
+	// Builtin function "load": Takes a string with a file name and imports it as an Lsp script
+	// On success, return empty list, otherwise print any errors
+	
+	LASSERT_NUM("load", args, 1);
+	LASSERT_TYPE("load", args, 0, LVAL_STR);
+	
+	// Parse the file contents
+	mpc_result_t r;
+	if (mpc_parse_contents(args->cell[0]->str, Lsp, &r)) {
+		
+		// Read AST
+		lval* expr = lval_read(r.output);
+		mpc_ast_delete(r.output);
+		
+		// Evaluate each S-expression
+		while (expr->count) {
+			lval* x = lval_eval(env, lval_pop(expr, 0));
+			if (x->type == LVAL_ERR) { lval_println(x); }
+			lval_del(x);
+		}
+		
+		lval_del(expr);
+		lval_del(args);
+		return lval_sexpr();
+		
+	} else {
+		
+		// Parsing error, print it
+		char* err_msg = mpc_err_string(r.error);
+		mpc_err_delete(r.error);
+		
+		// Return an error lval
+		lval* err = lval_err("Could not load library %s", err_msg);
+		free(err_msg);
+		lval_del(args);
+		return err;
+	}
+}
+
 lval* builtin_exit() {
 	// Builtin function "exit": returns an error code that tells the REPL to end the session
 	return lval_err("LSP_REPL_EXIT_SEQUENCE");
@@ -862,6 +914,9 @@ void lenv_add_builtin(lenv* env, char* name, lbuiltin func) {
 void lenv_add_builtins(lenv* env) {
 	// REPL functions
 	lenv_add_builtin(env, "exit", builtin_exit);
+	
+	// Library functions
+	lenv_add_builtin(env, "load", builtin_load);
 
 	// Variable functions
 	lenv_add_builtin(env, "def", builtin_def);
@@ -1063,14 +1118,14 @@ lval* lval_read(mpc_ast_t* t) {
 int main(int argc, char** argv) {
 	
 	// Declare parsers
-	mpc_parser_t* Number  = mpc_new("number");
-	mpc_parser_t* Symbol  = mpc_new("symbol");
-	mpc_parser_t* String  = mpc_new("string");
-	mpc_parser_t* Comment = mpc_new("comment");
-	mpc_parser_t* Sexpr   = mpc_new("sexpr");
-	mpc_parser_t* Qexpr   = mpc_new("qexpr");
-	mpc_parser_t* Expr    = mpc_new("expr");
-	mpc_parser_t* Lsp     = mpc_new("lsp");
+	Number  = mpc_new("number");
+	Symbol  = mpc_new("symbol");
+	String  = mpc_new("string");
+	Comment = mpc_new("comment");
+	Sexpr   = mpc_new("sexpr");
+	Qexpr   = mpc_new("qexpr");
+	Expr    = mpc_new("expr");
+	Lsp     = mpc_new("lsp");
 
 	// Define them
 	mpca_lang(MPCA_LANG_DEFAULT,
@@ -1087,43 +1142,53 @@ int main(int argc, char** argv) {
 		",
 		Number, Symbol, String, Comment, Sexpr, Qexpr, Expr, Lsp);
 	
-	// Print version and exit information
-	puts("Lsp version 0.0.0.0.11");
-	puts("Ctrl+C to exit\n");
-	
 	// Initialise environment
 	lenv* env = lenv_new();
 	lenv_add_builtins(env);
 	
-	// Endlessly prompt for input and reply back
-	while (1) {
-		
-		// Get user input and add it to the history
-		char* input = readline("lsp> ");
-		add_history(input);
-		
-		// Attempt to parse user input
-		mpc_result_t r;
-		if (mpc_parse("<stdin>", input, Lsp, &r)) {
-			// On success evaluate AST and print result
-			lval* result = lval_eval(env, lval_read(r.output));
-			if (result->type == LVAL_ERR && strcmp(result->err, "LSP_REPL_EXIT_SEQUENCE") == 0) {
-				// TODO: this is a VERY janky way to exit the terminal by reserving a certain error
-				// code. Unsure of how to do a better method that does not involve polluting the
-				// namespace or too much unnecessary computation. It'll be simpler once the
-				// interpreter and the REPL are separate entities
-				break;
-			}
-			lval_println(result);
+	// If filenames were passed as arguments, run them. Otherwise run REPL
+	if (argc >= 2) {
+		for (int i = 1; i < argc; i++) {
+			lval* args = lval_add(lval_sexpr(), lval_str(argv[i]));
+			lval* result = builtin_load(env, args);
+			
+			if (result->type == LVAL_ERR) { lval_println(result); }
 			lval_del(result);
-			mpc_ast_delete(r.output);
-		} else {
-			// Otherwise print parse error
-			mpc_err_print(r.error);
-			mpc_err_delete(r.error);
 		}
+	} else {
 		
-		free(input);
+		// Print version and exit information
+		puts("Lsp version 0.0.0.0.11");
+		puts("Ctrl+C to exit\n");
+		
+		while (1) {			
+			
+			char* input = readline("lsp> ");
+			add_history(input);
+			
+			// Attempt to parse user input
+			mpc_result_t r;
+			if (mpc_parse("<stdin>", input, Lsp, &r)) {
+				// On success evaluate AST and print result
+				lval* result = lval_eval(env, lval_read(r.output));
+				if (result->type == LVAL_ERR && strcmp(result->err, "LSP_REPL_EXIT_SEQUENCE") == 0) {
+					// TODO: this is a VERY janky way to exit the terminal by reserving a certain
+					// error code. Unsure of how to do a better method that does not involve
+					// polluting the namespace or too much unnecessary computation. It'll be
+					// simpler once the interpreter and the REPL are separate entities
+					break;
+				}
+				lval_println(result);
+				lval_del(result);
+				mpc_ast_delete(r.output);
+			} else {
+				// Otherwise print parse error
+				mpc_err_print(r.error);
+				mpc_err_delete(r.error);
+			}
+			
+			free(input);
+		}
 	}
 	
 	lenv_del(env);

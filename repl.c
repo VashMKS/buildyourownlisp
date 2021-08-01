@@ -898,6 +898,75 @@ lval* builtin_load(lenv* env, lval* args) {
 	}
 }
 
+lval* builtin_print(lenv* env, lval* args) {
+	// Builtin function "print": Prints each argument to stdout, separated by spaces
+	
+	for (int i = 0; i < args->count; i++) {
+		lval_print(args->cell[i]);
+		if (i < args->count - 1) { putchar(' '); }
+	}
+	
+	putchar('\n');
+	
+	lval_del(args);
+	return lval_sexpr();
+}
+
+lval* builtin_error(lenv* env, lval* args) {
+	// Builtin function "error": Generates an error lval with a custom error message
+	
+	LASSERT_NUM("error", args, 1);
+	LASSERT_TYPE("error", args, 0, LVAL_STR);
+	
+	lval* error = lval_err(args->cell[0]->str);
+	
+	lval_del(args);
+	return error;
+}
+
+lval* builtin_read(lenv* env, lval* args) {
+	// Builtin function "read": Converts a string into a Q-expression
+	
+	LASSERT_NUM("read", args, 1);
+	LASSERT_TYPE("read", args, 0, LVAL_STR);
+	
+	// Parse string contents
+	mpc_result_t r;
+	if (mpc_parse("<string>", args->cell[0]->str, Lsp, &r)) {
+		
+		// Read AST
+		lval* expr = lval_read(r.output);
+		mpc_ast_delete(r.output);
+		
+		// Return AST as a Q-expression
+		expr->type = LVAL_QEXPR;
+		return expr;
+		
+	} else {
+		
+		// Parsing error, print it
+		char* err_msg = mpc_err_string(r.error);
+		mpc_err_delete(r.error);
+		
+		// Return an error lval
+		lval* err = lval_err("Could not read expression %s", err_msg);
+		free(err_msg);
+		lval_del(args);
+		return err;
+	}
+}
+
+lval* builtin_show(lenv* env, lval* args) {
+	// Builtin function "show": Print the contents of a string as is i.e. unescaped
+	
+	LASSERT_NUM("show", args, 1);
+	LASSERT_TYPE("show", args, 0, LVAL_STR);
+	
+	printf("\"%s\"\n", args->cell[0]->str);
+	lval_del(args);
+	return lval_sexpr();
+}
+
 lval* builtin_exit() {
 	// Builtin function "exit": returns an error code that tells the REPL to end the session
 	return lval_err("LSP_REPL_EXIT_SEQUENCE");
@@ -954,7 +1023,13 @@ void lenv_add_builtins(lenv* env) {
 	lenv_add_builtin(env, "eval", builtin_eval);
 	lenv_add_builtin(env, "join", builtin_join);
 	lenv_add_builtin(env, "cons", builtin_cons);
-	lenv_add_builtin(env, "len", builtin_len);
+	lenv_add_builtin(env, "len",  builtin_len);
+	
+	// String functions
+	lenv_add_builtin(env, "print", builtin_print);
+	lenv_add_builtin(env, "error", builtin_error);
+	lenv_add_builtin(env, "read",  builtin_read);
+	lenv_add_builtin(env, "show",  builtin_show);
 }
 
 // Evaluation

@@ -1221,6 +1221,9 @@ int main(int argc, char** argv) {
 	lenv* env = lenv_new();
 	lenv_add_builtins(env);
 	
+	// Load standard library
+	builtin_load(env, lval_add(lval_sexpr(), lval_str("prelude.lsp")));
+	
 	// If filenames were passed as arguments, run them. Otherwise run REPL
 	if (argc >= 2) {
 		for (int i = 1; i < argc; i++) {
